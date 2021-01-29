@@ -1,0 +1,174 @@
+
+--SQL 練習--
+
+--------------------------------------[隨機抽樣]-------------------------------------------- 
+--REF:https://sqlrambling.net/2018/01/24/tablesample-basic-examples/　
+
+--[寫法一: 效能較佳]
+SELECT * 
+FROM {DATASETS} TABLESAMPLE SYSTEM (10 PERCENT) --隨機的10%筆數, 有可能出現不符合數量的狀態
+
+SELECT * 
+FROM {DATASETS} TABLESAMPLE SYSTEM (10 PERCENT) REPEATABLE (123) --固定重複的筆數
+--/*以上兩種就是固定筆數與否的差別*/
+
+
+--/*未指定哪10筆/ 20 ROWS, 每次執行會隨機出現*/
+SELECT * 
+FROM {DATASETS} TABLESAMPLE SYSTEM (10) 
+
+SELECT * 
+FROM {DATASETS} TABLESAMPLE (20 ROWS)   
+
+--/*TABLESAMPLE SYSTEM 語法要放在FROM TABLE 後面; 如果{DATASETS} 的筆數太少, 有可能跑出0筆結果*/
+
+
+---EG---
+--EXE1: 216 
+--EXE2: 189
+--EXE3: 108
+SELECT *
+FROM {DATASET} TABLESAMPLE SYSTEM (1 PERCENT)                   --EXP: 147
+
+
+--EXE1:1404
+SELECT *
+FROM {DATASET} TABLESAMPLE SYSTEM (10 PERCENT) REPEATABLE (1471) --EXP:1471   
+
+
+--EXE1, EXE2:0, 跑出0個結果
+SELECT *
+FROM {DATASET} TABLESAMPLE SYSTEM (0.1 PERCENT) 
+
+
+--EXE1: 54
+--EXE2: 54 
+SELECT *
+FROM {DATASET} TABLESAMPLE SYSTEM (0.1 PERCENT) REPEATABLE (1471) --EXP: 15
+
+
+--EXE1: 3186
+--EXE2: 3188
+SELECT *
+FROM {DATASET} TABLESAMPLE SYSTEM (20 PERCENT)                    --EXP: 1471*2 = 2962
+
+
+
+--[寫法二: 效能一般]
+SELECT top 1 * 
+FROM {DATASETS} 
+WHERE id= (SELECT TOP 1 id 
+             FROM {DATASETS} 
+			 WITH(INDEX =id_index) 
+			 ORDER BY NEWID())
+
+
+			 
+---------------------------------------[一般數學]-------------------------------------------
+ --1.ROUND：取四捨五入值 ROUND(資料, 捨入小數位數)
+ SELECT 
+     x, y, ROUND(x, 2) AS round_xy
+ FROM table_name;			 
+
+ 
+ --2.ABS：取絕對值（ABS(數值)）
+ SELECT 
+     x, y, ABS(x, y) AS abs_xy
+ FROM table_name;
+
+ 
+ --3.MOD：取餘數（MOD(被除數, 除數)）
+ SELECT 
+     x, y, MOD(x, y) AS mod_xy
+ FROM table_name; 
+			 
+
+
+--------------------------------------[進階串接]--------------------------------------------
+/*我們要知道有哪幾天是有店面營業額而沒有網路營業額的，用以下的 SQL 語句*/：
+SELECT Txn_Date FROM Store_Information
+MINUS
+SELECT Txn_Date FROM Internet_Sales;			 
+--請注意，在 MINUS 指令下，不同的值只會被列出一次!!
+
+
+
+
+			 
+-------------------------------------[新增欄位: 百分比]--------------------------------------
+--STEP 1: CREATE TABLE: dati_record 表, 其中包含tm_id(每個題目的ID)，right_anser(正確答案)，mem_anser(使用者給出的答案)
+DROP TABLE #A 
+CREATE TABLE #A (
+  TM_ID INT
+, RIGHT_ANS INT 
+, MEM_ANS INT
+
+
+);
+
+
+--INSERT INTO #A (TM_ID, RIGHT_ANS, MEM_ANS )   --寫法一
+INSERT INTO #A                                  --寫法二
+VALUES (1,2,2), (2,3,2), (3,4,4), (4,2,3)
+
+SELECT * FROM #A 
+
+
+--STEP 2: EXERCISE, 思路：①首先取出每道題有多少人答過（構成答題次數，被除數） 
+                       -- ②然後取出每道題有多少人答對過（構成除數） 
+					   -- ③結合答題情況表和回答正確表，聯合兩張表，獲取需要的tm_id、答題次數以及回答正確次數 
+					   -- ④使用除法，來獲取正確率
+
+--①
+SELECT TM_ID
+     , COUNT(1) AS '答題次數' 
+FROM #A 
+GROUP BY TM_ID 
+ORDER BY '答題次數' DESC 
+--TM_ID	答題次數
+--1	1
+--2	1
+--3	1
+--4	1
+
+
+--②
+SELECT  TM_ID 
+       ,COUNT(1) AS '正確次數' 
+FROM #A  
+WHERE RIGHT_ANS = MEM_ANS 
+GROUP BY TM_ID
+ORDER BY '正確次數' DESC
+--TM_ID	正確次數
+--1	1
+--3	1
+
+
+--CONVERT (DECIMAL(18, 2), 除數 * 1.0 / 被除數) * 100) 取的商結果是四捨五入的，並且小數部分都是零
+--CONVERT (DECIMAL(5, 0), COUNT(*)* 100.0/ SUM (COUNT(*)) OVER () ) as Rate
+SELECT A.TM_ID
+      ,B.正確次數
+	  ,A.答題次數
+	 -- ,CAST ( (CONVERT(DECIMAL (18, 2), B.正確次數 * 1.0 / A.答題次數) * 100) AS VARCHAR (50)) +'%' AS '正確率' --CONVERT 寫法
+      ,CAST ( CAST (B.正確次數*1.0*100 / A.答題次數 AS  DECIMAL(10,2)) AS VARCHAR (50)) +'%' AS '正確率'        --CAST 寫法
+
+FROM ( 
+       (SELECT TM_ID
+              ,COUNT(1) AS '答題次數' 
+        FROM #A 
+		GROUP BY TM_ID
+		) AS A 
+INNER JOIN (SELECT TM_ID
+                 ,COUNT(1) AS '正確次數'  
+		    FROM #A 
+			WHERE RIGHT_ANS = MEM_ANS  
+			GROUP BY TM_ID
+	    ) AS B 
+ON A.TM_ID = B.TM_ID 
+)  
+ORDER BY '正確率'
+
+--NOTE 1: decimal(a,b) 引數a 用於指定小數點左邊和右邊可以儲存的十進位制數字的最大個數，目前最大精度為38。 引數b 用於指定小數點右邊可以儲存的十進位制數字的最大個數
+--NOTE 2: 精度和小数位数的默认值分别是18与0。如果在decimal类型中不提供这两个值，SQL Server将截断数字的小数部分，而不会产生错误
+          --SELECT CAST('12.5' AS decimal), 结果是一个整数值：12
+
